@@ -1737,7 +1737,23 @@ public class GroovyParserVisitor {
             if (name instanceof J.Literal) {
                 String nameStr = ((J.Literal) name).getValueSource();
                 assert nameStr != null;
-                name = new J.Identifier(randomId(), name.getPrefix(), Markers.EMPTY, emptyList(), nameStr, null, null);
+
+                name = new J.Identifier(
+                    randomId(),
+                    name.getPrefix(),
+                    Markers.EMPTY,
+                    emptyList(),
+                    nameStr,
+                    typeMapping.type(prop.getProperty().getType()),
+                    new JavaType.Variable(
+                        null,
+                        0,
+                        nameStr,
+                        typeMapping.type(prop.getObjectExpression().getType()),
+                        typeMapping.type(prop.getProperty().getType()),
+                        null
+                    )
+                );
             }
             if (prop.isSpreadSafe()) {
                 name = name.withMarkers(name.getMarkers().add(new StarDot(randomId())));
@@ -2199,7 +2215,8 @@ public class GroovyParserVisitor {
             String part = parts[i];
             if (i == 0) {
                 fullName = part;
-                expr = new J.Identifier(randomId(), EMPTY, Markers.EMPTY, emptyList(), part, typeMapping.type(classNode), null);
+                expr = new J.Identifier(randomId(), EMPTY, Markers.EMPTY, emptyList(), part, null, null);
+                expr = applyCorrectType(expr, classNode, fullName, parts, i);
             } else {
                 fullName += "." + part;
 
@@ -2217,10 +2234,9 @@ public class GroovyParserVisitor {
                         Markers.EMPTY,
                         expr,
                         padLeft(namePrefix, new J.Identifier(randomId(), identFmt, Markers.EMPTY, emptyList(), part.trim(), null, null)),
-                        (Character.isUpperCase(part.charAt(0)) || i == parts.length - 1) ?
-                                JavaType.ShallowClass.build(fullName) :
-                                null
+                        typeMapping.type(classNode)
                 );
+                expr = applyCorrectType(expr, classNode, fullName, parts, i);
             }
         }
 
@@ -2231,6 +2247,51 @@ public class GroovyParserVisitor {
             }
         }
         return expr.withPrefix(prefix);
+    }
+
+    private Expression applyCorrectType(Expression expr, ClassNode classNode, String fullName, String[] parts, int i) {
+        if (classNode == null) {
+            return expr.withType(typeMapping.type(classNode));
+        }
+
+        String simpleClassName = classNode.getNameWithoutPackage();
+        JavaType clazz = typeMapping.type(classNode);
+
+        String simpleOuterClassName = null;
+        JavaType outerClass = null;
+
+        if (classNode.getName().contains("$")) {
+            String[] simpleClassNameParts = classNode.getNameWithoutPackage().split("\\$");
+            simpleOuterClassName = simpleClassNameParts[0];
+            simpleClassName = simpleClassNameParts[1];
+
+            String[] classNameParts = classNode.getName().split("\\$");
+            outerClass = JavaType.ShallowClass.build(classNameParts[0]);
+        }
+
+        if (expr instanceof J.Identifier) {
+            J.Identifier ident = (J.Identifier) expr;
+
+            if (ident.getSimpleName().equals(simpleClassName)) {
+                return expr.withType(clazz);
+            } else if (outerClass != null && ident.getSimpleName().equals(simpleOuterClassName)) {
+                return expr.withType(outerClass);
+            }
+        }
+        if (expr instanceof J.FieldAccess) {
+            J.FieldAccess fieldAccess = (J.FieldAccess) expr;
+
+            if (fieldAccess.getSimpleName().equals(simpleClassName)) {
+                return expr.withType(clazz);
+            } else if (outerClass != null && fieldAccess.getSimpleName().equals(simpleOuterClassName)) {
+                return expr.withType(outerClass);
+            }
+        }
+        return expr.withType(
+            (Character.isUpperCase(parts[i].charAt(0)) || i == parts.length - 1) ?
+                JavaType.ShallowClass.build(fullName) :
+                null
+        );
     }
 
     private TypeTree arrayType(ClassNode classNode) {
